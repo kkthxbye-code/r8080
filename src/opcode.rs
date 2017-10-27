@@ -1,19 +1,19 @@
 use std::fmt;
 
 pub struct Opcode {
-	pub opcode: u8,
+      pub opcode: u8,
 }
 
 impl Opcode {
-	pub fn new(opcode: u8) -> Opcode {
-		Opcode {
-			opcode: opcode,
-		}
-	}
+      pub fn new(opcode: u8) -> Opcode {
+            Opcode {
+                  opcode: opcode,
+            }
+      }
 }
 
 impl fmt::Debug for Opcode {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+      fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let op = match self.opcode {
             0x00 => "NOP",
             0x01 => "LXI B",
@@ -272,7 +272,7 @@ impl fmt::Debug for Opcode {
             0xfe => "CPI",
             0xff => "RST 7",
             _ => unreachable!(),
-        };	
+        };  
         write!(f, "{:#04x} ({})", self.opcode, op)
-	}
+      }
 }
