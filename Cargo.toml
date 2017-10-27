@@ -1,0 +1,8 @@
+[package]
+name = "r8080"
+version = "0.1.0"
+authors = ["Simon <toft1988@gmail.com>"]
+
+[dependencies]
+minifb = "0.10.3"
+byteorder = "1.1.0"
