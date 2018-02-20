@@ -7,7 +7,6 @@ mod ram;
 mod opcode;
 mod cpu;
 mod util;
-mod registers;
 mod instructions;
 
 use cpu::Cpu;
