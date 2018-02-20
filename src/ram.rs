@@ -17,15 +17,20 @@ impl Sram {
         }
     }
 
-    pub fn load(&mut self, file_name: &str) {
+    pub fn load_offset(&mut self, file_name: &str, offset: u16) {
         let mut f = File::open(&file_name).expect("Unable to open file");
         
         let mut rom_bytes: Vec<u8> = Vec::new();
         f.read_to_end(&mut rom_bytes).expect("Unable to read bytes");
 
         for (i, &item) in rom_bytes.iter().enumerate() {
-            self.bytes[i] = item;
+            self.bytes[i+offset as usize] = item;
         }
+    }
+
+    pub fn load(&mut self, file_name: &str)
+    {
+        self.load_offset(file_name, 0x00);
     }
 
     pub fn read_byte(&self, address: u16) -> u8 {
@@ -41,6 +46,12 @@ impl Sram {
     }
 
     pub fn write_dword(&mut self, address: u16, value: u16) {
+        let (upper, lower) = u16_to_u8(value);
+        self.bytes[address as usize] = lower;
+        self.bytes[address as usize + 1] = upper;
+    }
+
+    pub fn write_dword_stack(&mut self, address: u16, value: u16) {
         let (upper, lower) = u16_to_u8(value);
         self.bytes[address as usize] = upper;
         self.bytes[address as usize + 1] = lower;

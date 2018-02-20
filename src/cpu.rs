@@ -3,18 +3,18 @@ use ram::Sram;
 use util::*;
 use opcode::Opcode;
 
+use instructions::*;
+
 use minifb::{Key, WindowOptions, Window};
 use byteorder::{BigEndian, ReadBytesExt};
 
-#[allow(dead_code)]
 const REG_BC: u8 = 0;
-#[allow(dead_code)]
 const REG_DE: u8 = 1;
 const REG_HL: u8 = 2;
-#[allow(dead_code)]
 const REG_AF: u8 = 3;
 
 const REG_A: u8 = 7;
+const REG_M: u8 = 6;
 
 const FLAG_C: u8 = 1 << 0;
 const FLAG_P: u8 = 1 << 2;
@@ -23,44 +23,55 @@ const FLAG_INT: u8 = 1 << 5;
 const FLAG_Z: u8 = 1 << 6;
 const FLAG_S: u8 = 1 << 7;
 
-const INT_MID: u16 = 0x08;
-const INT_END: u16 = 0x10;
+const INT_END: u16 = 0x08;
+const INT_MID: u16 = 0x10;
 
-const WIDTH: usize = 256;
-const HEIGHT: usize = 224;
+const WIDTH: usize = 224;
+const HEIGHT: usize = 256;
 
 #[allow(dead_code)]
 pub struct Cpu {
-    a: u8,
-    f: u8,
-    b: u8,
-    c: u8,
-    d: u8,
-    e: u8,
-    h: u8,
-    l: u8,
-    sp: u16,
-    pc: u16,
-    ram: Sram,
-    cycles: u32,
-    current_opcode: u8,
-    instruction_count: u64,
-    last_interrupt: u16,
-    window: Window,
-    buffer: Vec<u32>,
+    pub a: u8,
+    pub f: u8,
+    pub b: u8,
+    pub c: u8,
+    pub d: u8,
+    pub e: u8,
+    pub h: u8,
+    pub l: u8,
+
+    pub sp: u16,
+    pub pc: u16,
+
+    pub ram: Sram,
+
+    pub cycles: u32,
+    pub instruction_count: u64,
+
+    pub current_opcode: u8,
+    pub last_interrupt: u16,
+
+    pub window: Window,
+    
+    pub port4hi: u8,
+    pub port4lo: u8,
+    pub port2: u8,
+    pub inp1: u8,
+    pub inp2: u8,
+    pub port3o: u8,
+    pub port5o: u8,
+
+    pub interrupt_in_progress: bool,
 }
 
 impl Cpu {
     pub fn new(ram: Sram) -> Cpu {
-        let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
-
-        let mut window = Window::new("Test - ESC to exit",
-                                 HEIGHT,
+        let window = Window::new("Space Invaders",
                                  WIDTH,
+                                 HEIGHT,
                                  WindowOptions::default()).unwrap_or_else(|e| {
             panic!("{}", e);
         });
-
 
         Cpu {
             a: 0x00,
@@ -71,22 +82,56 @@ impl Cpu {
             e: 0x00,
             h: 0x00,
             l: 0x00,
-            sp: 0x0000,
+
+            sp: 0x2400,
             pc: 0x0000,
+
             ram: ram,
             cycles: 0,
-            current_opcode: 0x00,
             instruction_count: 0,
+            
+            current_opcode: 0x00,
+
             last_interrupt: INT_MID,
+
             window: window,
-            buffer: buffer,
+
+            port4hi: 0x00,
+            port4lo: 0x00,
+            port2: 0x00,
+            inp1: 0x00,
+            inp2: 0x00,
+            port3o: 0x00,
+            port5o: 0x00,
+
+            interrupt_in_progress: false,
+        }
+    }
+}
+
+impl Cpu {
+    pub fn run(&mut self) {
+        loop {
+            
+            self.check_interrupt();
+
+            let opcode = Opcode::new(self.ram.read_byte(self.pc));
+
+            self.current_opcode = opcode.opcode;
+
+            self.pc += 1;
+
+            self.run_instruction(opcode);
+            self.instruction_count += 1;
+            
+            //println!("{:?}", self);
         }
     }
 }
 
 // Read/Write register methods and utility
 impl Cpu {
-    fn read_byte(&self, index: u8) -> u8 {
+    pub fn read_byte(&self, index: u8) -> u8 {
         match index {
             0 => self.b,
             1 => self.c,
@@ -100,31 +145,38 @@ impl Cpu {
         }
     }
 
-    fn pop_stack(&mut self) -> u16 {
+    pub fn read_stack(&self) -> u16 {
+        let value = u8_to_u16(self.ram.read_byte(self.sp + 1), self.ram.read_byte(self.sp));
+
+        value
+    }
+
+
+    pub fn pop_stack(&mut self) -> u16 {
         let value = u8_to_u16(self.ram.read_byte(self.sp + 1), self.ram.read_byte(self.sp));
         self.sp += 2;
 
         value
     }
 
-    fn push_stack(&mut self, value: u16) {
+    pub fn push_stack(&mut self, value: u16) {
         self.sp -= 2;
-        self.ram.write_dword(self.sp, value);
+        self.ram.write_dword_stack(self.sp, value);
     }
 
 
-    fn read_dword(&self, index: u8) -> u16 {
+    pub fn read_dword(&self, index: u8) -> u16 {
         match index {
             0 => u8_to_u16(self.c, self.b),
             1 => u8_to_u16(self.e, self.d),
             2 => u8_to_u16(self.l, self.h),
             3 => self.sp,
             4 => u8_to_u16(self.f, self.a),
-            _ => panic!("Unknwon index for read_dword()")
+            _ => panic!("Unknown index for read_dword()")
         }
     }
 
-    fn write_byte(&mut self, index: u8, value: u8) {
+    pub fn write_byte(&mut self, index: u8, value: u8) {
         match index {
             0 => self.b = value,
             1 => self.c = value,
@@ -141,7 +193,7 @@ impl Cpu {
         }
     }
 
-    fn write_dword(&mut self, index: u8, value: u16) {
+    pub fn write_dword(&mut self, index: u8, value: u16) {
         match index {
             0 => {
                 let (upper, lower) = u16_to_u8(value);
@@ -171,21 +223,21 @@ impl Cpu {
         }
     }
 
-    fn read_im_byte(&mut self) -> u8 {
+    pub fn read_im_byte(&mut self) -> u8 {
         let im = self.ram.read_byte(self.pc);
         self.pc += 1;
 
         im
     }
 
-    fn read_im_dword(&mut self) -> u16 {
+    pub fn read_im_dword(&mut self) -> u16 {
         let im = self.ram.read_dword(self.pc);
         self.pc += 2;
 
         im
     }
 
-    fn set_flags(&mut self, mask: u8, initial: u16, result: u16) {
+    pub fn set_flags(&mut self, mask: u8, initial: u16, result: u16) {
         if (mask & FLAG_Z) != 0 {
             if result as u8 == 0 {
                 self.f |= FLAG_Z;
@@ -227,7 +279,7 @@ impl Cpu {
         }
     }
 
-    fn read_flag(&mut self, flag: u8) -> bool {
+    pub fn read_flag(&mut self, flag: u8) -> bool {
         let res = match flag {
             FLAG_AC => self.f & FLAG_AC,
             FLAG_C => self.f & FLAG_C,
@@ -245,9 +297,13 @@ impl Cpu {
         }
     }
 
-    fn check_interrupt(&mut self) {
+    pub fn move_pc(&mut self, address: u16) {
+        self.pc = address;
+    }
+
+    pub fn check_interrupt(&mut self) {
         if self.cycles > 16667 {
-            self.cycles -= 1667;
+            self.cycles -= 16667;
 
             if self.read_flag(FLAG_INT) {
                 self.interrupt();
@@ -255,7 +311,9 @@ impl Cpu {
         }
     }
 
-    fn interrupt(&mut self) {
+    pub fn interrupt(&mut self) {
+        self.interrupt_in_progress = true;
+
         let address: u16;
         let pc = self.pc;
 
@@ -263,6 +321,7 @@ impl Cpu {
             address = INT_MID;
         } else {
             address = INT_END;
+            self.handle_input();
             self.vblank();
         }
 
@@ -272,7 +331,7 @@ impl Cpu {
         self.last_interrupt = address;
     }
 
-    fn dump_flags(&mut self) {
+    pub fn dump_flags(&mut self) {
         println!("Z: {:?} AC: {:?} C: {:?} P: {:?} S: {:?} I: {:?}", 
             self.read_flag(FLAG_Z),
             self.read_flag(FLAG_AC),
@@ -284,75 +343,90 @@ impl Cpu {
     }
 }
 
+
+
 impl Cpu {
     fn get_vram(&self) -> &[u8] {
         &self.ram.bytes[0x2400..0x4000]
     }
 
     fn vblank(&mut self) {
-        let mut framebuffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
-
+        let mut framebuffer: Vec<u32> = Vec::new();
+        let mut framebuffer_new: Vec<u32> = Vec::new();
 
         for (i, byte) in self.get_vram().iter().enumerate() {
-            const SHIFT_END: u8 = 7;
-
-            // Really x is y and y is x as the frame is rotated 90 degrees
-            let y = i * 8 / (WIDTH as usize + 1);
-
-            for shift in 0..SHIFT_END + 1 {
-                let x = ((i * 8) % (WIDTH as usize)) + shift as usize;
-
-                let pixel = if (byte >> shift) & 1 == 0 {
-                        [0, 0, 0, 255]
-                    } else {
-                        [255, 255, 255, 255]
-                    };
-
+            for shift in 0..8 {
+                let pixel = if (byte & (1 << shift)) == 0 {
+                    [0, 0, 0, 255]
+                } else {
+                    [255, 255, 255, 255]
+                };
+            
                 let mut buff = &pixel[..];
                 let num = buff.read_u32::<BigEndian>().unwrap();
 
-                framebuffer[(x*HEIGHT+y) as usize] = num;
+                framebuffer.push(num);
             }
         }
 
-        for (i, byte) in framebuffer.iter().rev().enumerate() {
-            self.buffer[i] = *byte as u32;
+        for y in (0..HEIGHT).rev() {
+            for x in (0..WIDTH) {
+                framebuffer_new.push(framebuffer[y+(HEIGHT*x)]);
+            }
         }
 
-        self.window.update_with_buffer(&self.buffer).unwrap();
+        self.window.update_with_buffer(&framebuffer_new).unwrap();
     }
-}
 
+    fn handle_input(&mut self) {
+        if !self.window.is_open() {
+            return ();
+        }
 
-impl Cpu {
-    pub fn run(&mut self) {
-        loop {
-            self.check_interrupt();
+        let mut input_received = false;
 
-            let opcode = Opcode::new(self.ram.read_byte(self.pc));
+        if self.window.is_key_down(Key::Left) {
+            self.inp1 |= (1 << 5);
+            input_received = true;
+        }
 
-            self.current_opcode = opcode.opcode;
+        if self.window.is_key_down(Key::Right) {
+            self.inp1 |= (1 << 6);
+            input_received = true;
+        }
 
-            self.pc += 1;
+        if self.window.is_key_down(Key::C) {
+            self.inp1 |= (1 << 0);
+            input_received = true;
+        }
 
-            self.run_instruction(opcode);
-            self.instruction_count += 1;
+        if self.window.is_key_down(Key::X) {
+            self.inp1 |= (1 << 2);
+            input_received = true;
+        }
+
+        if self.window.is_key_down(Key::Z) {
+            self.inp1 |= (1 << 4);
+            input_received = true;
+        }
+
+        if !input_received {
+            self.inp1 = 0x0;
         }
     }
 }
-
 
 //Instructions
 impl Cpu {
     fn run_instruction(&mut self, opcode: Opcode) {
         match opcode.opcode {
             //TODO: Fix memory cycle counting.
-            0x00 | 0x10 | 0x20 | 0x30 | 0x08 | 0x18 | 0x28 | 0x38   => { self.nop(); self.cycles += 4; },
-            0xC3 | 0xCB                                             => { self.jmp(); self.cycles += 10; },
-            0x01 | 0x11 | 0x21 | 0x31                               => { self.lxi(); self.cycles += 10;},
-            0x06 | 0x16 | 0x26 | 0x36 | 0x0E | 0x1E | 0x2E | 0x3E   => { self.mvi(); self.cycles += 7; },
-            0xCD | 0xDD | 0xED | 0xFD                               => { self.call(); self.cycles += 17; },
-            0x0A | 0x1A                                             => { self.ldax(); self.cycles += 7; },
+            0x00 | 0x10 | 0x20 | 0x30 | 0x08 | 0x18 | 0x28 | 0x38   => { nop(self); self.cycles += 4; },
+            0xC3 | 0xCB                                             => { jmp(self); self.cycles += 10; },
+            0x01 | 0x11 | 0x21 | 0x31                               => { lxi(self); self.cycles += 10;},
+            0x06 | 0x16 | 0x26 | 0x36 | 0x0E | 0x1E | 0x2E | 0x3E   => { mvi(self); self.cycles += 7; },
+            0xCD | 0xDD | 0xED | 0xFD                               => { call(self); self.cycles += 17; },
+            0x0A | 0x1A                                             => { ldax(self); self.cycles += 7; },
             0x40 | 0x50 | 0x60 | 0x70 | 0x41 | 0x51 | 0x61 | 
             0x71 | 0x42 | 0x52 | 0x62 | 0x72 | 0x43 | 0x53 | 
             0x63 | 0x73 | 0x44 | 0x54 | 0x64 | 0x74 | 0x45 | 
@@ -361,34 +435,64 @@ impl Cpu {
             0x49 | 0x59 | 0x69 | 0x79 | 0x4A | 0x5A | 0x6A | 
             0x7A | 0x4B | 0x5B | 0x6B | 0x7B | 0x4C | 0x5C | 
             0x6C | 0x7C | 0x4D | 0x5D | 0x6D | 0x7D | 0x4E | 
-            0x5E | 0x6E | 0x7E | 0x4F | 0x5F | 0x6F | 0x7F          => { self.mov(); self.cycles += 5; },
-            0x03 | 0x13 | 0x23 | 0x33                               => { self.inx(); self.cycles += 5; },
-            0x05 | 0x15 | 0x25 | 0x35 | 0x0D | 0x1D | 0x2D | 0x3D   => { self.dcr(); self.cycles += 5; },
-            0xC2                                                    => { self.jnz(); self.cycles += 10; },
-            0x32                                                    => { self.sta(); self.cycles += 13; },
-            0xC9 | 0xD9                                             => { self.ret(); self.cycles += 10; },
-            0xFE                                                    => { self.cpi(); self.cycles += 7; },
-            0xC5 | 0xD5 | 0xE5 | 0xF5                               => { self.push(); self.cycles += 11; },
-            0x09 | 0x19 | 0x29 | 0x39                               => { self.dad(); self.cycles += 10; },
-            0xEB                                                    => { self.xchg(); self.cycles += 5; },
-            0xC1 | 0xD1 | 0xE1 | 0xF1                               => { self.pop(); self.cycles += 10; },
-            0xD3                                                    => { self.out(); self.cycles += 10; },
-            0x04 | 0x14 | 0x24 | 0x34  |0x0C | 0x1C | 0x2C | 0x3C   => { self.inr(); self.cycles += 5; },
-            0x0F                                                    => { self.rrc(); self.cycles += 4; },
-            0xE6                                                    => { self.ani(); self.cycles += 7; },
-            0xC6                                                    => { self.adi(); self.cycles += 7; },
-            0x88 | 0x89 | 0x8A | 0x8B | 0x8C | 0x8D | 0x8E | 0x8F   => { self.adc(); self.cycles += 4; },
-            0x3A                                                    => { self.lda(); self.cycles += 13; },
-            0xA8 | 0xA9 | 0xAA | 0xAB | 0xAC | 0xAD | 0xAE | 0xAF   => { self.xra(); self.cycles += 4; },
-            0xFB                                                    => { self.ei(); self.cycles += 4; },
-            0xA0 | 0xA1 | 0xA2 | 0xA3 | 0xA4 | 0xA5 | 0xA6 | 0xA7   => { self.ana(); self.cycles += 4; },
-            0xCA                                                    => { self.jz(); self.cycles += 10; },
-            0xDB                                                    => { self.inp(); self.cycles += 10; },
-            0xC8                                                    => { self.rz(); self.cycles += 11; },
-            0xDA                                                    => { self.jc(); self.cycles += 10; },
-            0xD2                                                    => { self.jnc(); self.cycles += 10; },
-            0x37                                                    => { self.stc(); self.cycles += 4; },
-            0xD8                                                    => { self.rc(); self.cycles += 11; },
+            0x5E | 0x6E | 0x7E | 0x4F | 0x5F | 0x6F | 0x7F          => { mov(self); self.cycles += 5; },
+            0x03 | 0x13 | 0x23 | 0x33                               => { inx(self); self.cycles += 5; },
+            0x05 | 0x15 | 0x25 | 0x35 | 0x0D | 0x1D | 0x2D | 0x3D   => { dcr(self); self.cycles += 5; },
+            0xC2                                                    => { jnz(self); self.cycles += 10; },
+            0x32                                                    => { sta(self); self.cycles += 13; },
+            0xC9 | 0xD9                                             => { ret(self); self.cycles += 10; },
+            0xFE                                                    => { cpi(self); self.cycles += 7; },
+            0xC5 | 0xD5 | 0xE5 | 0xF5                               => { push(self); self.cycles += 11; },
+            0x09 | 0x19 | 0x29 | 0x39                               => { dad(self); self.cycles += 10; },
+            0xEB                                                    => { xchg(self); self.cycles += 5; },
+            0xC1 | 0xD1 | 0xE1 | 0xF1                               => { pop(self); self.cycles += 10; },
+            0xD3                                                    => { out(self); self.cycles += 10; },
+            0x04 | 0x14 | 0x24 | 0x34  |0x0C | 0x1C | 0x2C | 0x3C   => { inr(self); self.cycles += 5; },
+            0x0F                                                    => { rrc(self); self.cycles += 4; },
+            0xE6                                                    => { ani(self); self.cycles += 7; },
+            0xC6                                                    => { adi(self); self.cycles += 7; },
+            0x88 | 0x89 | 0x8A | 0x8B | 0x8C | 0x8D | 0x8E | 0x8F   => { adc(self); self.cycles += 4; },
+            0x3A                                                    => { lda(self); self.cycles += 13; },
+            0xA8 | 0xA9 | 0xAA | 0xAB | 0xAC | 0xAD | 0xAE | 0xAF   => { xra(self); self.cycles += 4; },
+            0xFB                                                    => { ei(self); self.cycles += 4; },
+            0xA0 | 0xA1 | 0xA2 | 0xA3 | 0xA4 | 0xA5 | 0xA6 | 0xA7   => { ana(self); self.cycles += 4; },
+            0xCA                                                    => { jz(self); self.cycles += 10; },
+            0xDB                                                    => { inp(self); self.cycles += 10; },
+            0xC8                                                    => { rz(self); self.cycles += 5; },
+            0xDA                                                    => { jc(self); self.cycles += 10; },
+            0xD2                                                    => { jnc(self); self.cycles += 10; },
+            0x37                                                    => { stc(self); self.cycles += 4; },
+            0xD8                                                    => { rc(self); self.cycles += 5; },
+            0xB0 | 0xB1 | 0xB2 | 0xB3 | 0xB4 | 0xB5 | 0xB6 | 0xB7   => { ora(self); self.cycles += 4; },
+            0x07                                                    => { rlc(self); self.cycles += 4; },
+            0xC4                                                    => { cnz(self); self.cycles += 11; },
+            0x2A                                                    => { lhld(self); self.cycles += 16; },
+            0x1F                                                    => { rar(self); self.cycles += 4; },
+            0xF6                                                    => { ori(self); self.cycles += 7; },
+            0xE3                                                    => { xthl(self); self.cycles += 18; },
+            0xE9                                                    => { pchl(self); self.cycles += 5; },
+            0xC0                                                    => { rnz(self); self.cycles += 5; },
+            0xD0                                                    => { rnc(self); self.cycles += 5; },
+            0x27                                                    => { daa(self); self.cycles += 4; },
+            0xCC                                                    => { cz(self); self.cycles += 11; },
+            0x0B | 0x1B | 0x2B | 0x3B                               => { dcx(self); self.cycles += 5; },
+            0xFA                                                    => { jm(self); self.cycles += 10; },
+            0x22                                                    => { shld(self); self.cycles += 16; },
+            0xD6                                                    => { sui(self); self.cycles += 7; },
+            0xDE                                                    => { sbi(self); self.cycles += 7; },
+            0x80 | 0x81 | 0x82 | 0x83 | 0x84 | 0x85 | 0x86 | 0x87   => { add(self); self.cycles += 4; },
+            0x2F                                                    => { cma(self); self.cycles += 4; },
+            0xB8 | 0xB9 | 0xBA | 0xBB | 0xBC | 0xBD | 0xBE | 0xBF   => { cmp(self); self.cycles += 4; },
+            0xD4                                                    => { cnc(self); self.cycles += 11; },
+            0x90 | 0x91 | 0x92 | 0x93 | 0x94 | 0x95 | 0x96 | 0x97   => { sub(self); self.cycles += 4; },
+            0xEA                                                    => { jpe(self); self.cycles += 10; },
+            0xE2                                                    => { jpo(self); self.cycles += 10; },
+            0xF2                                                    => { jp(self); self.cycles += 10; },
+            0xCE                                                    => { aci(self); self.cycles += 7; },
+            0x02 | 0x12                                              => { stax(self); self.cycles += 7; },
+
+
+
 
 
             _ => {
@@ -400,301 +504,23 @@ impl Cpu {
             }
         }
     }
-
-    fn nop(&mut self) {
-        self.cycles += 4;
-    }
-
-    fn jmp(&mut self) {
-        let dest = self.read_im_dword();
-        self.pc = dest;
-    }
-
-    fn lxi(&mut self) {
-        let im = self.read_im_dword();
-        let dst = (self.current_opcode >> 4) & 0x03;
-
-        self.write_dword(dst, im);
-    }
-
-    fn mvi(&mut self) {
-        let im = self.read_im_byte();
-        let dst = (self.current_opcode >> 3) & 0x07;
-
-        self.write_byte(dst, im);
-    }
-
-    fn call(&mut self) {
-        let address = self.read_im_dword();
-        let sp = self.pc;
-        
-        self.push_stack(sp);
-        
-        self.pc = address;
-    }
-
-    fn ldax(&mut self) {
-        let src = (self.current_opcode >> 4) & 0x03;
-        let dst = REG_A;
-
-        let address = self.read_dword(src);
-        let value = self.ram.read_byte(address);
-
-        self.write_byte(dst, value);
-    }
-
-    fn mov(&mut self) {
-        let src = self.current_opcode & 0x07;
-        let dst = (self.current_opcode >> 3) & 0x07;
-
-        let value = self.read_byte(src);
-        self.write_byte(dst, value);
-    }
-
-    fn inx(&mut self) {
-        let dst = (self.current_opcode >> 4) & 0x03;
-        let curr = self.read_dword(dst);
-
-        let res = curr.wrapping_add(1);
-        self.write_dword(dst, res);
-    }
-
-    fn dcr(&mut self) {
-        let dst = (self.current_opcode >> 3) & 0x07;
-        let curr = self.read_byte(dst) as u16;
-
-        let res = curr.wrapping_sub(1);
-
-        self.write_byte(dst, res as u8);
-
-        self.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P, curr, res);
-    }
-
-    fn jnz(&mut self) {
-        let address = self.read_im_dword();
-
-        if !self.read_flag(FLAG_Z) {
-            self.pc = address;
-        }
-    }
-
-    fn jz(&mut self) {
-        let address = self.read_im_dword();
-
-        if self.read_flag(FLAG_Z) {
-            self.pc = address;
-        }
-    }
-
-    fn sta(&mut self) {
-        let address = self.read_im_dword();
-        let value = self.read_byte(REG_A);
-        self.ram.write_byte(address, value);
-    }
-
-    fn ret(&mut self) {
-        let address = self.pop_stack();
-
-        self.pc = address;
-    }
-
-    fn cpi(&mut self) {
-        let rhs = self.read_im_byte() as u16;
-        let lhs = self.read_byte(REG_A) as u16;
-
-        let result = lhs.wrapping_sub(rhs);
-
-        self.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P, rhs, result);
-    }
-
-    fn push(&mut self) {
-        let src = (self.current_opcode >> 4) & 0x03;
-
-        if src == 3 {
-            //PSW
-            let value = self.read_dword(4);
-            self.push_stack(value);
-        } else {
-            let value = self.read_dword(src);
-            self.push_stack(value);
-        }
-    }
-
-    fn dad(&mut self) {
-        let src = (self.current_opcode >> 4) & 0x03;
-        let value = self.read_dword(src) as u32;
-
-        let result: u32 = value.wrapping_add(self.read_dword(REG_HL) as u32);
-
-        if result > 0xffff {
-            self.f |= FLAG_C;
-        } else {
-            self.f &= !FLAG_C;
-        }
-
-        self.write_dword(REG_HL, result as u16);
-    }
-
-    fn xchg(&mut self) {
-        let de = self.read_dword(REG_DE);
-        let hl = self.read_dword(REG_HL);
-
-        self.write_dword(REG_DE, hl);
-        self.write_dword(REG_HL, de);
-    }
-
-    fn pop(&mut self) {
-        let dst = (self.current_opcode >> 4) & 0x03;
-
-        let value = self.pop_stack();
-
-        if dst == 3 {
-            //PSW
-            self.write_dword(4, value);
-        } else {
-            self.write_dword(dst, value);
-        }
-    }
-
-    fn out(&mut self) {
-        let port = self.read_im_byte();
-
-        match port {
-            _ => /*println!("Unimplemented port for OUT: {:#04x}", port)*/ (),
-        }
-    }
-
-    fn inr(&mut self) {
-        let dst = (self.current_opcode >> 3) & 0x07;
-        let curr = self.read_byte(dst) as u16;
-
-        let res = curr.wrapping_add(1);
-
-        self.write_byte(dst, res as u8);
-
-        self.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P, curr, res);
-    }
-
-    fn rrc(&mut self) {
-        if (self.a & 1) != 0 {
-            self.f |= FLAG_C;
-        } else {
-            self.f &= !FLAG_C;
-        }
-
-        let result = (self.a >> 1) | (self.f & FLAG_C) << 7;
-        self.write_byte(REG_A, result);
-    }
-
-    fn ani(&mut self) {
-        let im = self.read_im_byte() as u16;
-        let a = self.read_byte(REG_A) as u16;
-        let result = a & im;
-
-        self.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P | FLAG_C, a, result);
-
-        self.write_byte(REG_A, result as u8);
-    }
-
-    fn adi(&mut self) {
-        let im = self.read_im_byte() as u16;
-        let a = self.read_byte(REG_A) as u16;
-        let result = a + im;
-
-        self.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P | FLAG_C, im, result);
-
-        self.write_byte(REG_A, result as u8);
-    }
-
-    fn adc(&mut self) {
-        let src = (self.current_opcode >> 3) & 0x07;        
-        let value = self.read_byte(src) as u16;
-        let a = self.read_byte(REG_A) as u16;
-
-        let im_result = a.wrapping_add(value);
-        let result = im_result.wrapping_add(self.f as u16 & FLAG_C as u16);
-
-        self.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P | FLAG_C, value, result);
-
-        self.write_byte(REG_A, result as u8);
-    }
-
-    fn lda(&mut self) {
-        let address = self.read_im_dword();
-        let value = self.ram.read_byte(address);
-        self.write_byte(REG_A, value);
-    }
-
-    fn xra(&mut self) {
-        let dst = (self.current_opcode >> 3) & 0x07;
-        let value = self.read_byte(dst);
-        let result = value as u16 ^ self.a as u16;
-
-        self.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P | FLAG_C, value as u16, result);
-        self.write_byte(dst, result as u8);
-    }
-
-    fn ana(&mut self) {
-        let dst = (self.current_opcode >> 3) & 0x07;
-        let value = self.read_byte(dst);
-        let result = value as u16 & self.a as u16;
-
-        self.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P | FLAG_C, value as u16, result);
-        self.write_byte(dst, result as u8);
-    }
-
-
-    fn ei(&mut self) {
-        self.f |= FLAG_INT; 
-    }
-
-    fn inp(&mut self) {
-        let _port = self.read_im_byte();
-    }
-
-    fn rz(&mut self) {
-        if self.read_flag(FLAG_Z) {
-            let address = self.pop_stack();
-
-            self.pc = address;          
-        }
-    }
-
-    fn jc(&mut self) {
-        let address = self.read_im_dword();
-
-        if self.read_flag(FLAG_C) {
-            self.pc = address;
-        }
-    }
-
-    fn jnc(&mut self) {
-        let address = self.read_im_dword();
-
-        if !self.read_flag(FLAG_C) {
-            self.pc = address;
-        }
-    }
-
-    fn stc(&mut self) {
-        self.f |= FLAG_C;
-    }
-
-    fn rc(&mut self) {
-        if self.read_flag(FLAG_C) {
-            let address = self.pop_stack();
-
-            self.pc = address;          
-        }
-    }
 }
 
 impl fmt::Debug for Cpu {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        /*let sv = self.read_stack();
+
         write!(
             f, 
-            "PC: {:#06x} SP: {:#06x} A: {:#04x} B: {:#04x} C: {:#04x} D: {:#04x} E: {:#04x} H: {:#04x} L: {:#04x} F: {:#04x} ", 
-            self.pc, self.sp, self.a, self.b, self.c, self.d, self.e, self.h, self.l, self.f
+            "PC: {:#06x} OPCODE: {:?} SP: {:#06x} SV: {:#06X} A: {:#04x} B: {:#04x} C: {:#04x} D: {:#04x} E: {:#04x} H: {:#04x} L: {:#04x} F: {:#04x} ", 
+            self.pc, Opcode::new(self.current_opcode), self.sp, sv, self.a, self.b, self.c, self.d, self.e, self.h, self.l, self.f
+        )*/
+        
+        
+        write!(
+            f, 
+            "PC: {:#06x} OPCODE: {:#04x} CYCLES: {} SP: {:#06x} A: {:#04x} B: {:#04x} C: {:#04x} D: {:#04x} E: {:#04x} H: {:#04x} L: {:#04x} F: {:#04x} ", 
+            self.pc, Opcode::new(self.current_opcode).opcode, self.cycles, self.sp, self.a, self.b, self.c, self.d, self.e, self.h, self.l, self.f
         )
     }
 }
