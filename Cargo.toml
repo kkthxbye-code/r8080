@@ -6,3 +6,4 @@ authors = ["Simon <toft1988@gmail.com>"]
 [dependencies]
 minifb = "0.10.3"
 byteorder = "1.1.0"
+text_io = "0.1.7"

@@ -52,7 +52,7 @@ impl Sram {
     }
 
     pub fn write_dword_stack(&mut self, address: u16, value: u16) {
-        let (upper, lower) = u16_to_u8(value);
+        let (lower, upper) = u16_to_u8(value);
         self.bytes[address as usize] = upper;
         self.bytes[address as usize + 1] = lower;
     }

@@ -2,6 +2,7 @@
 
 extern crate minifb;
 extern crate byteorder;
+#[macro_use] extern crate text_io;
 
 mod ram;
 mod opcode;

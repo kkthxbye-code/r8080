@@ -1,4 +1,5 @@
 use cpu::*;
+use util::*;
 
 const REG_BC: u8 = 0;
 const REG_DE: u8 = 1;
@@ -78,7 +79,6 @@ pub fn out(state: &mut Cpu) {
 //Jump instructions
 pub fn jmp(state: &mut Cpu) {
     let dest = state.read_im_dword();
-    //println!("Jump to {:#06x}", dest);
 
     state.pc = dest;
 }
@@ -151,7 +151,6 @@ pub fn jp(state: &mut Cpu) {
 pub fn call(state: &mut Cpu) {
     let address = state.read_im_dword();
 
-    //println!("Jump to {:#06x}", address);
     let pc = state.pc;
 
     state.push_stack(pc);
@@ -199,14 +198,52 @@ pub fn cz(state: &mut Cpu) {
 pub fn ret(state: &mut Cpu) {
     let address = state.pop_stack();
 
-    //println!("RET to {:#06x}", address);
-
     state.pc = address;
 }
 
 
 pub fn rz(state: &mut Cpu) {
     if state.read_flag(FLAG_Z) {
+        let address = state.pop_stack();
+
+        state.pc = address;          
+
+        state.cycles += 6;
+    }
+}
+
+pub fn rp(state: &mut Cpu) {
+    if !state.read_flag(FLAG_S) {
+        let address = state.pop_stack();
+
+        state.pc = address;          
+
+        state.cycles += 6;
+    }
+}
+
+pub fn rm(state: &mut Cpu) {
+    if state.read_flag(FLAG_S) {
+        let address = state.pop_stack();
+
+        state.pc = address;          
+
+        state.cycles += 6;
+    }
+}
+
+pub fn rpe(state: &mut Cpu) {
+    if state.read_flag(FLAG_P) {
+        let address = state.pop_stack();
+
+        state.pc = address;          
+
+        state.cycles += 6;
+    }
+}
+
+pub fn rpo(state: &mut Cpu) {
+    if !state.read_flag(FLAG_P) {
         let address = state.pop_stack();
 
         state.pc = address;          
@@ -267,16 +304,6 @@ pub fn shld(state: &mut Cpu) {
     let address = state.read_im_dword();
     let value = state.read_dword(REG_HL);
 
-    //println!("SHLD ADDRESS: {:#06x}", address);
-    //println!("SHLD VALUE: {:#06x}", value);
-
-    //let upper = (value >> 8) as u8;
-    //let lower = (value & 0xff) as u8; 
-
-
-
-    //state.ram.write_byte(address, lower);
-    //state.ram.write_byte(address+1, upper);
     state.ram.write_dword(address, value);
 }
 
@@ -319,12 +346,6 @@ pub fn lda(state: &mut Cpu) {
 pub fn lhld(state: &mut Cpu) {
     let address = state.read_im_dword();
     let value = state.ram.read_dword(address);
-
-    //let lower = state.ram.read_byte(address);
-    //let upper = state.ram.read_byte(address+1);
-
-    //println!("LHLD LOWER: {:#04x}", lower);
-    //println!("LHLD UPPER: {:#04x}", upper);
 
     state.write_dword(REG_HL, value);
 }
@@ -577,6 +598,22 @@ pub fn rar(state: &mut Cpu) {
     }
 }
 
+pub fn ral(state: &mut Cpu) {
+    let tmp = state.a;
+
+    state.a = tmp << 1;
+
+    if state.read_flag(FLAG_C) {
+        state.a |= 0x01;
+    }
+
+    if (tmp & 0x80) > 0 {
+        state.f |= FLAG_C;
+    } else {
+        state.f &= !FLAG_C;
+    }
+}
+
 pub fn ori(state: &mut Cpu) {
     let value = state.read_im_byte();
     let result = value as u16 | state.a as u16;
@@ -622,20 +659,55 @@ pub fn dcx(state: &mut Cpu) {
 }
 
 pub fn sbi(state: &mut Cpu) {
-    let value = state.read_im_byte() as u16;
-    let a = state.a as u16;
+    //TODO: Make pretty
+    let lhs = state.a as u16;
+    let mut rhs = state.read_im_byte() as u16;
 
-    let result;
+    let carry;
 
     if state.read_flag(FLAG_C) {
-        result = a.wrapping_sub(value.wrapping_sub(1));
+        carry = 1;
     } else {
-        result = a.wrapping_sub(value);
+        carry = 0;
     }
 
-    state.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P | FLAG_C, a, result);
+    rhs = rhs.wrapping_add(carry) as u16;
 
-    state.write_byte(REG_A, result as u8);
+    let answer = (state.a as u16).wrapping_sub(rhs);
+    let a = state.a as u16;
+
+    state.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P | FLAG_C, a, answer);
+
+    state.a = answer as u8;
+}
+
+pub fn sbb(state: &mut Cpu) {
+    let src = state.current_opcode & 0x07;
+
+    if src == REG_M {
+        state.cycles += 3;
+    }
+
+    //TODO: Make pretty
+    let lhs = state.a as u16;
+    let mut rhs = state.read_byte(src) as u16;
+
+    let carry;
+
+    if state.read_flag(FLAG_C) {
+        carry = 1;
+    } else {
+        carry = 0;
+    }
+
+    rhs = rhs.wrapping_add(carry) as u16;
+
+    let answer = (state.a as u16).wrapping_sub(rhs);
+    let a = state.a as u16;
+
+    state.set_flags(FLAG_S | FLAG_AC | FLAG_Z | FLAG_P | FLAG_C, a, answer);
+
+    state.a = answer as u8;
 }
 
 pub fn sui(state: &mut Cpu) {
@@ -711,4 +783,88 @@ pub fn stax(state: &mut Cpu) {
     let value = state.read_byte(REG_A);
 
     state.ram.write_byte(address, value);
+}
+
+pub fn xri(state: &mut Cpu) {
+    let value = state.read_im_byte();
+    let a = state.a;
+    let result = state.a ^ value;
+
+    state.f &= !FLAG_C;
+
+    state.set_flags(FLAG_S | FLAG_Z | FLAG_P, a as u16, result as u16);
+    state.write_byte(REG_A, result);
+}
+
+pub fn cc(state: &mut Cpu) {
+    let address = state.read_im_dword();
+    
+    if state.read_flag(FLAG_C) {
+        let pc = state.pc;
+        state.push_stack(pc);
+        state.pc = address;
+
+        state.cycles += 6;
+    }
+}
+
+pub fn cpo(state: &mut Cpu) {
+    let address = state.read_im_dword();
+    
+    if !state.read_flag(FLAG_P) {
+        let pc = state.pc;
+        state.push_stack(pc);
+        state.pc = address;
+
+        state.cycles += 6;
+    }
+}
+
+pub fn cm(state: &mut Cpu) {
+    let address = state.read_im_dword();
+    
+    if state.read_flag(FLAG_S) {
+        let pc = state.pc;
+        state.push_stack(pc);
+        state.pc = address;
+
+        state.cycles += 6;
+    }
+}
+
+pub fn cpe(state: &mut Cpu) {
+    let address = state.read_im_dword();
+    
+    if state.read_flag(FLAG_P) {
+        let pc = state.pc;
+        state.push_stack(pc);
+        state.pc = address;
+
+        state.cycles += 6;
+    }
+}
+
+pub fn cp(state: &mut Cpu) {
+    let address = state.read_im_dword();
+    
+    if !state.read_flag(FLAG_S) {
+        let pc = state.pc;
+        state.push_stack(pc);
+        state.pc = address;
+
+        state.cycles += 6;
+    }
+}
+
+pub fn cmc(state: &mut Cpu) {
+    if state.read_flag(FLAG_C) {
+        state.f &= !FLAG_C;
+    } else {
+        state.f |= FLAG_C;
+    }
+}
+
+pub fn sphl(state: &mut Cpu) {
+    let value = state.read_dword(REG_HL);
+    state.sp = value;
 }

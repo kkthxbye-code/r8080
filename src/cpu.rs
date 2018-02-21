@@ -112,10 +112,29 @@ impl Cpu {
 impl Cpu {
     pub fn run(&mut self) {
         loop {
-            
             self.check_interrupt();
 
             let opcode = Opcode::new(self.ram.read_byte(self.pc));
+
+            /*
+            if opcode.opcode == 0x76 {
+                println!("HALT at {:#06x}", self.pc);
+            }
+
+            if self.pc == 0x0005 {
+                if self.c == 9 {
+                    let addr = self.read_dword(REG_DE);
+
+                    for x in 0..10 {
+                        println!("{:?}", self.ram.read_byte(addr+x) as char);
+                    }
+                }
+
+                if self.c == 2 {
+                    println!("{:?}", self.e as char);
+                }
+            }
+            */
 
             self.current_opcode = opcode.opcode;
 
@@ -153,7 +172,7 @@ impl Cpu {
 
 
     pub fn pop_stack(&mut self) -> u16 {
-        let value = u8_to_u16(self.ram.read_byte(self.sp + 1), self.ram.read_byte(self.sp));
+        let value = u8_to_u16(self.ram.read_byte(self.sp), self.ram.read_byte(self.sp+1));
         self.sp += 2;
 
         value
@@ -489,11 +508,21 @@ impl Cpu {
             0xE2                                                    => { jpo(self); self.cycles += 10; },
             0xF2                                                    => { jp(self); self.cycles += 10; },
             0xCE                                                    => { aci(self); self.cycles += 7; },
-            0x02 | 0x12                                              => { stax(self); self.cycles += 7; },
-
-
-
-
+            0x02 | 0x12                                             => { stax(self); self.cycles += 7; },
+            0xEE                                                    => { xri(self); self.cycles += 7; },
+            0xDC                                                    => { cc(self); self.cycles += 11; },
+            0xE4                                                    => { cpo(self); self.cycles += 11; },
+            0xFC                                                    => { cm(self); self.cycles += 11; },
+            0xEC                                                    => { cpe(self); self.cycles += 11; },
+            0xF4                                                    => { cp(self); self.cycles += 11; },
+            0xE8                                                    => { rpe(self); self.cycles += 5; },
+            0xE0                                                    => { rpo(self); self.cycles += 5; },
+            0xF0                                                    => { rp(self); self.cycles += 5; },
+            0xF8                                                    => { rm(self); self.cycles += 5; },
+            0x98 | 0x99 | 0x9A | 0x9B | 0x9C | 0x9D | 0x9E | 0x9F   => { sbb(self); self.cycles += 4; },
+            0x3F                                                    => { cmc(self); self.cycles += 4; },
+            0x17                                                    => { ral(self); self.cycles += 4; },
+            0xF9                                                    => { sphl(self); self.cycles += 5; },
 
             _ => {
                 println!("Unknown opcode: {:?}", opcode);
@@ -508,19 +537,19 @@ impl Cpu {
 
 impl fmt::Debug for Cpu {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        /*let sv = self.read_stack();
+        let sv = self.read_stack();
 
         write!(
             f, 
             "PC: {:#06x} OPCODE: {:?} SP: {:#06x} SV: {:#06X} A: {:#04x} B: {:#04x} C: {:#04x} D: {:#04x} E: {:#04x} H: {:#04x} L: {:#04x} F: {:#04x} ", 
             self.pc, Opcode::new(self.current_opcode), self.sp, sv, self.a, self.b, self.c, self.d, self.e, self.h, self.l, self.f
-        )*/
+        )
         
-        
+        /*
         write!(
             f, 
             "PC: {:#06x} OPCODE: {:#04x} CYCLES: {} SP: {:#06x} A: {:#04x} B: {:#04x} C: {:#04x} D: {:#04x} E: {:#04x} H: {:#04x} L: {:#04x} F: {:#04x} ", 
             self.pc, Opcode::new(self.current_opcode).opcode, self.cycles, self.sp, self.a, self.b, self.c, self.d, self.e, self.h, self.l, self.f
-        )
+        )*/
     }
 }
