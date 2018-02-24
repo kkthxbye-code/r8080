@@ -5,6 +5,7 @@ use opcode::Opcode;
 
 use instructions::*;
 
+use std::{thread, time};
 use minifb::{Key, WindowOptions, Window};
 use byteorder::{BigEndian, ReadBytesExt};
 
@@ -50,6 +51,7 @@ pub struct Cpu {
 
     pub current_opcode: u8,
     pub last_interrupt: u16,
+    pub last_interrupt_time: time::Instant,
 
     pub window: Window,
     
@@ -93,6 +95,7 @@ impl Cpu {
             current_opcode: 0x00,
 
             last_interrupt: INT_MID,
+            last_interrupt_time: time::Instant::now(),
 
             window: window,
 
@@ -321,12 +324,28 @@ impl Cpu {
     }
 
     pub fn check_interrupt(&mut self) {
+        let now = time::Instant::now();
+        let elapsed = now.duration_since(self.last_interrupt_time);
+        let nanos = elapsed.subsec_nanos() as u64;
+
+        let elapsed_nanos = elapsed.as_secs() + nanos;
+        let needed: u64 = 1000000000/120;
+
+        if elapsed_nanos < needed {
+            let sleep_period = (needed - elapsed_nanos) / 1_000_000;
+            let sleep_duration = time::Duration::from_millis(sleep_period);
+
+            thread::sleep(sleep_duration);
+        }
+
         if self.cycles > 16667 {
             self.cycles -= 16667;
 
             if self.read_flag(FLAG_INT) {
                 self.interrupt();
             }
+
+            self.last_interrupt_time = time::Instant::now();
         }
     }
 
@@ -523,6 +542,7 @@ impl Cpu {
             0x3F                                                    => { cmc(self); self.cycles += 4; },
             0x17                                                    => { ral(self); self.cycles += 4; },
             0xF9                                                    => { sphl(self); self.cycles += 5; },
+            0xF3                                                    => { di(self); self.cycles += 4; },
 
             _ => {
                 println!("Unknown opcode: {:?}", opcode);

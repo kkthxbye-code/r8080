@@ -25,6 +25,10 @@ pub fn ei(state: &mut Cpu) {
     state.f |= FLAG_INT; 
 }
 
+pub fn di(state: &mut Cpu) {
+    state.f &= !FLAG_INT; 
+}
+
 //Input/Output
 pub fn inp(state: &mut Cpu) {
     let port = state.read_im_byte();
